@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nimo monitor</title>
+<style>
+  :root{
+    --bg:#0a0c10; --card:#11141a; --line:#222830;
+    --fg:#e8ecf0; --dim:#68707c; --acc:#78f0b4; --warn:#ff6262;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg); min-height:100vh;
+    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  main{max-width:720px; margin:0 auto; padding:32px 16px 64px}
+
+  header{display:flex; align-items:center; justify-content:space-between; margin-bottom:28px}
+  .logo{display:flex; align-items:center; gap:10px; font-weight:600; letter-spacing:.2px}
+  .logo i{width:9px; height:9px; border-radius:50%; background:var(--acc); display:block}
+  .logo span{color:var(--dim); font-weight:400}
+  #summary{color:var(--dim); font-size:13px}
+
+  form{display:flex; gap:8px; margin-bottom:20px}
+  input{
+    flex:1; min-width:0; background:var(--card); color:var(--fg);
+    border:1px solid var(--line); border-radius:12px; padding:12px 14px; font:inherit; outline:none;
+  }
+  input:focus{border-color:var(--acc)}
+  input::placeholder{color:var(--dim)}
+  .btn{
+    background:var(--acc); color:#06210f; border:0; border-radius:12px;
+    padding:0 18px; font:inherit; font-weight:600; cursor:pointer;
+  }
+  .btn:hover{filter:brightness(1.08)}
+
+  #notice{
+    display:none; margin-bottom:16px; padding:12px 14px; border-radius:12px;
+    border:1px solid var(--warn); color:var(--warn); font-size:13px;
+  }
+
+  #list{display:grid; gap:14px}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px 20px}
+  .top{display:flex; align-items:center; gap:10px}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--dim); flex:none}
+  .dot.up{background:var(--acc)} .dot.down{background:var(--warn)}
+  .host{color:var(--fg); text-decoration:none; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .host:hover{text-decoration:underline}
+  .x{margin-left:auto; background:none; border:0; color:var(--dim); font-size:20px; line-height:1; cursor:pointer; padding:0 2px}
+  .x:hover{color:var(--warn)}
+
+  .big{font-size:30px; font-weight:600; margin:10px 0 2px; letter-spacing:-.5px}
+  .big.up{color:var(--acc)} .big.down{color:var(--warn)} .big.unk{color:var(--dim)}
+  .err{color:var(--dim); font-size:13px; min-height:20px}
+
+  .meta{display:flex; gap:28px; margin:14px 0}
+  .meta span{display:block; font-size:11px; letter-spacing:.8px; color:var(--dim)}
+  .meta b{font:600 18px ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  .spark{width:100%; height:28px; display:block}
+  .foot{display:flex; justify-content:space-between; align-items:center; margin-top:12px; font-size:12px; color:var(--dim)}
+  .link{background:none; border:0; color:var(--dim); font:inherit; cursor:pointer; padding:0}
+  .link:hover{color:var(--fg)}
+
+  .empty{text-align:center; color:var(--dim); padding:56px 0}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo"><i></i>nimo<span>/monitor</span></div>
+    <div id="summary"></div>
+  </header>
+
+  <form id="form" autocomplete="off">
+    <input id="url" placeholder="seusite.com ou https://app.vercel.app" inputmode="url" autocapitalize="off" spellcheck="false">
+    <button class="btn" type="submit">adicionar</button>
+  </form>
+
+  <div id="notice"></div>
+  <section id="list"></section>
+</main>
+
+<script>
+const KEY = 'nimo.sites', INTERVAL = 15000, MAX = 30;
+const $ = s => document.querySelector(s);
+const state = {};                       // url -> { status, http, ms, err, at, hist[] }
+let sites = load();
+
+function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(sites)); } catch {} }
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function normalize(v){
+  v = v.trim(); if (!v) return null;
+  if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+  try {
+    const u = new URL(v);
+    if (!u.hostname.includes('.') && u.hostname !== 'localhost') return null;
+    return u.href;
+  } catch { return null; }
+}
+
+async function check(url){
+  const s = state[url] || (state[url] = { hist: [] });
+  try {
+    const r = await fetch('/api/check?url=' + encodeURIComponent(url), { cache: 'no-store' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || 'API ' + r.status);
+    }
+    const d = await r.json();
+    s.status = d.status === 'ONLINE' ? 'up' : 'down';
+    s.http = d.httpStatus; s.ms = d.responseTime; s.err = d.error || null; s.at = Date.now(); s.apiDown = false;
+    s.hist.push({ ok: s.status === 'up', ms: d.responseTime });
+    if (s.hist.length > MAX) s.hist.shift();
+  } catch (e) {
+    s.status = 'unk'; s.at = Date.now();
+    s.apiDown = e instanceof TypeError || location.protocol === 'file:';
+    s.err = s.apiDown ? null : e.message;
+  }
+}
+
+function spark(hist){
+  const W = 120, H = 24, slot = W / MAX;
+  const maxMs = Math.max(1, ...hist.filter(h => h.ok).map(h => h.ms));
+  const bars = hist.map((h, i) => {
+    const x = (MAX - hist.length + i) * slot;
+    const bh = h.ok ? Math.max(2, (h.ms / maxMs) * H) : H;
+    return `<rect x="${x.toFixed(1)}" y="${(H - bh).toFixed(1)}" width="${(slot - 1.2).toFixed(1)}" height="${bh.toFixed(1)}" rx="1" fill="${h.ok ? 'var(--acc)' : 'var(--warn)'}" opacity="${h.ok ? .75 : 1}"/>`;
+  }).join('');
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg>`;
+}
+
+function ago(at){
+  if (!at) return 'verificando…';
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  return s < 60 ? `há ${s}s` : `há ${Math.floor(s / 60)} min`;
+}
+
+function render(){
+  const list = $('#list');
+  if (!sites.length) {
+    list.innerHTML = '<div class="empty">Adicione o link de um site para começar a monitorar.</div>';
+    $('#summary').textContent = '';
+    $('#notice').style.display = 'none';
+    return;
+  }
+
+  list.innerHTML = sites.map(url => {
+    const s = state[url] || { hist: [], status: 'unk' };
+    const u = new URL(url);
+    const label = u.host + (u.pathname !== '/' ? u.pathname : '');
+    const word = s.status === 'up' ? 'online' : s.status === 'down' ? 'offline' : (s.at ? 'sem resposta' : 'verificando…');
+    const cls = s.status === 'up' ? 'up' : s.status === 'down' ? 'down' : 'unk';
+    const upt = s.hist.length ? Math.round(s.hist.filter(h => h.ok).length / s.hist.length * 100) + '%' : '--';
+    return `
+    <article class="card" data-url="${esc(url)}">
+      <div class="top">
+        <span class="dot ${s.status === 'unk' ? '' : cls}"></span>
+        <a class="host" href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>
+        <button class="x" data-rm aria-label="remover">×</button>
+      </div>
+      <div class="big ${cls}">${word}</div>
+      <div class="err">${esc(s.err || '')}</div>
+      <div class="meta">
+        <div><span>HTTP</span><b>${s.http || '--'}</b></div>
+        <div><span>PING</span><b>${s.ms ? s.ms + ' ms' : '--'}</b></div>
+        <div><span>UPTIME</span><b>${upt}</b></div>
+      </div>
+      ${spark(s.hist)}
+      <div class="foot">
+        <span data-at="${s.at || ''}">${ago(s.at)}</span>
+        <button class="link" data-copy>copiar link da API (ESP32)</button>
+      </div>
+    </article>`;
+  }).join('');
+
+  const up = sites.filter(u => state[u] && state[u].status === 'up').length;
+  $('#summary').textContent = `${up}/${sites.length} online`;
+
+  const apiDown = sites.some(u => state[u] && state[u].apiDown);
+  const n = $('#notice');
+  n.style.display = apiDown ? 'block' : 'none';
+  if (apiDown) n.textContent = 'Não consegui falar com /api/check. Abra a página pelo endereço publicado na Vercel, não pelo arquivo direto.';
+}
+
+async function checkAll(){
+  await Promise.all(sites.map(check));
+  render();
+}
+
+$('#form').addEventListener('submit', e => {
+  e.preventDefault();
+  const url = normalize($('#url').value);
+  if (!url) { $('#url').focus(); return; }
+  if (!sites.includes(url)) { sites.push(url); save(); render(); check(url).then(render); }
+  $('#url').value = '';
+});
+
+$('#list').addEventListener('click', e => {
+  const card = e.target.closest('.card'); if (!card) return;
+  const url = card.dataset.url;
+  if (e.target.matches('[data-rm]')) {
+    sites = sites.filter(u => u !== url); delete state[url]; save(); render();
+  } else if (e.target.matches('[data-copy]')) {
+    const api = location.origin + '/api/check?url=' + encodeURIComponent(url);
+    navigator.clipboard?.writeText(api).then(() => {
+      e.target.textContent = 'copiado ✓';
+      setTimeout(() => { e.target.textContent = 'copiar link da API (ESP32)'; }, 1500);
+    });
+  }
+});
+
+setInterval(() => { if (!document.hidden) checkAll(); }, INTERVAL);
+setInterval(() => {                       // atualiza o "há Xs" sem redesenhar tudo
+  document.querySelectorAll('[data-at]').forEach(el => { if (el.dataset.at) el.textContent = ago(+el.dataset.at); });
+}, 1000);
+
+render();
+checkAll();
+</script>
+</body>
+</html>
