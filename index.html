@@ -113,6 +113,7 @@ async function check(url){
     const d = await r.json();
     s.status = d.status === 'ONLINE' ? 'up' : 'down';
     s.http = d.httpStatus; s.ms = d.responseTime; s.err = d.error || null; s.at = Date.now(); s.apiDown = false;
+    s.vis = (d.visitorsOnline === null || d.visitorsOnline === undefined) ? null : d.visitorsOnline;
     s.hist.push({ ok: s.status === 'up', ms: d.responseTime });
     if (s.hist.length > MAX) s.hist.shift();
   } catch (e) {
@@ -165,6 +166,7 @@ function render(){
       <div class="big ${cls}">${word}</div>
       <div class="err">${esc(s.err || '')}</div>
       <div class="meta">
+        <div><span>VISITANTES</span><b>${s.vis != null ? s.vis : '--'}</b></div>
         <div><span>HTTP</span><b>${s.http || '--'}</b></div>
         <div><span>PING</span><b>${s.ms ? s.ms + ' ms' : '--'}</b></div>
         <div><span>UPTIME</span><b>${upt}</b></div>
