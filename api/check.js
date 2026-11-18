@@ -6,6 +6,7 @@
 // de ambiente da Vercel para que só esses domínios possam ser checados.
 
 const net = require('net');
+const redis = require('./_redis');
 
 const TIMEOUT = 8000;
 const UA = 'nimo-monitor/1.0 (+status check)';
@@ -87,14 +88,34 @@ module.exports = async (req, res) => {
   const online = httpStatus > 0 && httpStatus < 500;
   const status = online ? 'ONLINE' : 'OFFLINE';
 
+  // Visitantes online agora (só existe se o Redis estiver configurado
+  // e o script /api/track estiver instalado no site)
+  let visitors = null;
+  if (redis.enabled) {
+    try {
+      const key = redis.siteKey(target.hostname);
+      const r = await redis.run([
+        ['ZREMRANGEBYSCORE', key, 0, Date.now() - redis.WINDOW],
+        ['ZCARD', key],
+      ]);
+      visitors = Number(r[1]) || 0;
+    } catch {
+      visitors = null;
+    }
+  }
+
   res.status(200).json({
     url: target.href,
     name: target.hostname,
     status,
     httpStatus,
     responseTime,
+    visitorsOnline: visitors,
     error,
     checkedAt: new Date().toISOString(),
-    project: { name: target.hostname, status, httpStatus, responseTime },
+    project: {
+      name: target.hostname, status, httpStatus, responseTime,
+      ...(visitors !== null ? { visitorsOnline: visitors } : {}),
+    },
   });
 };
